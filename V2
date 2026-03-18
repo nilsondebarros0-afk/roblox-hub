@@ -1,1 +1,428 @@
+-- ╔══════════════════════════════════════════════════════╗
+-- ║         BLOX FRUITS - AUTO FARM v3.0                 ║
+-- ║  ✅ Attaque ENNEMIS seulement (pas les joueurs)      ║
+-- ║  ✅ Quêtes automatiques selon ton niveau             ║
+-- ║  ✅ Boucle jusqu'à complétion puis change de quête   ║
+-- ╚══════════════════════════════════════════════════════╝
 
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace        = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid  = character:WaitForChild("Humanoid")
+local rootPart  = character:WaitForChild("HumanoidRootPart")
+
+player.CharacterAdded:Connect(function(c)
+    character = c
+    humanoid  = c:WaitForChild("Humanoid")
+    rootPart  = c:WaitForChild("HumanoidRootPart")
+end)
+
+-- ════════════════════════════════════
+--         QUÊTES PAR NIVEAU
+-- ════════════════════════════════════
+local QUESTS = {
+    -- { min, max, npcNom, npcPosition, mobNom, mobPosition }
+    { min=1,   max=15,  npc="Rubber Boy Quest",       npcPos=Vector3.new(912, 124, 800),    mob="Bandit",          mobPos=Vector3.new(980, 124, 800) },
+    { min=15,  max=30,  npc="Sword Student Quest",    npcPos=Vector3.new(-1100, 5, 4000),   mob="Pirate",          mobPos=Vector3.new(-1000, 5, 4100) },
+    { min=30,  max=60,  npc="Desert Bandit Quest",    npcPos=Vector3.new(-500, 70, 1900),   mob="Desert Bandit",   mobPos=Vector3.new(-400, 70, 1950) },
+    { min=60,  max=90,  npc="Snow Bandit Quest",      npcPos=Vector3.new(1200, 250, -3200), mob="Snow Bandit",     mobPos=Vector3.new(1300, 250,-3200) },
+    { min=90,  max=120, npc="Sky Bandit Quest",       npcPos=Vector3.new(-5000, 3500, 500), mob="Sky Bandit",      mobPos=Vector3.new(-4900,3500, 500) },
+    { min=120, max=150, npc="Marine Quest",           npcPos=Vector3.new(500, 15, -1200),   mob="Marine",          mobPos=Vector3.new(600, 15, -1200) },
+    { min=150, max=200, npc="Pirate Quest",           npcPos=Vector3.new(-1300, 5, 3900),   mob="Pirate",          mobPos=Vector3.new(-1200, 5, 3900) },
+    { min=200, max=300, npc="Saber Expert Quest",     npcPos=Vector3.new(0, 15, 2000),      mob="Saber Expert",    mobPos=Vector3.new(100, 15, 2000) },
+    { min=300, max=400, npc="Warden Quest",           npcPos=Vector3.new(-4800, 30, 2200),  mob="Warden",          mobPos=Vector3.new(-4700, 30, 2200) },
+    { min=400, max=700, npc="Swan Pirate Quest",      npcPos=Vector3.new(-5300, 20, -600),  mob="Swan Pirate",     mobPos=Vector3.new(-5200, 20,-600) },
+    { min=700, max=1000,npc="Galley Pirate Quest",    npcPos=Vector3.new(5500, 15, 600),    mob="Galley Pirate",   mobPos=Vector3.new(5600, 15, 600) },
+    { min=1000,max=1500,npc="Kingdom Quest",          npcPos=Vector3.new(-15000,155,-1500), mob="Royal Soldier",   mobPos=Vector3.new(-14900,155,-1500) },
+    { min=1500,max=2000,npc="Graveyard Quest",        npcPos=Vector3.new(-16000,1400,-900), mob="Zombie",          mobPos=Vector3.new(-15900,1400,-900) },
+    { min=2000,max=2500,npc="Haunted Castle Quest",   npcPos=Vector3.new(-16300,1500,-800), mob="Vampire",         mobPos=Vector3.new(-16200,1500,-800) },
+    { min=2500,max=9999,npc="Sea Beast Quest",        npcPos=Vector3.new(-16000,1420,-750), mob="Sea Beast",       mobPos=Vector3.new(-15800,1420,-750) },
+}
+
+-- ════════════════════════════════════
+--         VARIABLES
+-- ════════════════════════════════════
+local autoFarmOn   = false
+local farmConn     = nil
+local currentQuest = nil
+local questDone    = false
+local status       = "En attente..."
+local killCount    = 0
+
+-- ════════════════════════════════════
+--         FONCTIONS UTILES
+-- ════════════════════════════════════
+
+-- Obtenir le niveau du joueur
+local function getLevel()
+    local stats = player:FindFirstChild("leaderstats") or player:FindFirstChild("Stats")
+    if stats then
+        local lvl = stats:FindFirstChild("Level") or stats:FindFirstChild("Beli")
+        if lvl then return lvl.Value end
+    end
+    -- Cherche dans le GUI
+    pcall(function()
+        local mainGui = playerGui:FindFirstChild("Main")
+        if mainGui then
+            local levelLabel = mainGui:FindFirstChild("Level", true)
+            if levelLabel then
+                return tonumber(levelLabel.Text:match("%d+")) or 1
+            end
+        end
+    end)
+    return 1
+end
+
+-- Trouver la bonne quête selon le niveau
+local function getQuestForLevel(lvl)
+    for _, q in pairs(QUESTS) do
+        if lvl >= q.min and lvl < q.max then
+            return q
+        end
+    end
+    return QUESTS[#QUESTS]
+end
+
+-- Téléporter le joueur
+local function tpTo(pos)
+    if rootPart and pos then
+        rootPart.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+        task.wait(0.3)
+    end
+end
+
+-- Vérifier si c'est un ennemi (pas un joueur)
+local function isEnemy(model)
+    if not model or not model:IsA("Model") then return false end
+    -- Vérifie que c'est PAS un joueur
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character == model then return false end
+    end
+    local h = model:FindFirstChildOfClass("Humanoid")
+    local r = model:FindFirstChild("HumanoidRootPart")
+    if not h or not r then return false end
+    if h.Health <= 0 then return false end
+    return true
+end
+
+-- Trouver l'ennemi le plus proche du nom donné
+local function findEnemy(mobName)
+    local closest, minD = nil, math.huge
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if isEnemy(obj) then
+            local nameMatch = mobName == nil or 
+                obj.Name:lower():find(mobName:lower()) ~= nil
+            if nameMatch then
+                local r = obj:FindFirstChild("HumanoidRootPart")
+                if r then
+                    local d = (rootPart.Position - r.Position).Magnitude
+                    if d < minD then minD = d; closest = obj end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- Prendre une quête via NPC
+local function takeQuest(npcName, npcPos)
+    status = "🗺️ Aller chercher la quête..."
+    tpTo(npcPos)
+    task.wait(0.5)
+    -- Cherche le NPC de quête
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name:lower():find(npcName:lower() ~= "" and npcName:lower() or "quest") then
+            local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj.PrimaryPart
+            if root then
+                tpTo(root.Position)
+                task.wait(0.3)
+                -- Tente d'interagir avec le NPC
+                local args = {[1] = obj}
+                pcall(function()
+                    ReplicatedStorage:FindFirstChild("Remotes") and
+                    ReplicatedStorage.Remotes:FindFirstChild("CommF_"):InvokeServer("TakeQuest", args)
+                end)
+                task.wait(0.5)
+                break
+            end
+        end
+    end
+    questDone = false
+    status = "⚔️ Quête prise ! Farming..."
+end
+
+-- Vérifier si la quête est complétée
+local function isQuestComplete()
+    -- Cherche dans le GUI un indicateur de quête complète
+    local complete = false
+    pcall(function()
+        for _, gui in pairs(playerGui:GetDescendants()) do
+            if gui:IsA("TextLabel") then
+                local t = gui.Text:lower()
+                if t:find("complete") or t:find("complété") or t:find("turn in") then
+                    complete = true
+                end
+            end
+        end
+    end)
+    return complete
+end
+
+-- ════════════════════════════════════
+--         BOUCLE PRINCIPALE
+-- ════════════════════════════════════
+local function startAutoFarm()
+    farmConn = task.spawn(function()
+        while autoFarmOn do
+            local lvl = getLevel()
+            currentQuest = getQuestForLevel(lvl)
+
+            -- Prendre la quête
+            status = "📋 Récupération quête (Lvl " .. lvl .. ")"
+            takeQuest(currentQuest.npc, currentQuest.npcPos)
+            task.wait(1)
+
+            -- Tuer les mobs jusqu'à quête complète
+            local loopKills = 0
+            while autoFarmOn and not isQuestComplete() do
+                -- Trouver un ennemi
+                local enemy = findEnemy(currentQuest.mob)
+
+                if enemy then
+                    local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+                    local enemyHum  = enemy:FindFirstChildOfClass("Humanoid")
+
+                    if enemyRoot and enemyHum and enemyHum.Health > 0 then
+                        -- Se téléporter sur l'ennemi
+                        rootPart.CFrame = enemyRoot.CFrame * CFrame.new(0, 0, 3)
+                        status = "⚔️ Combat: " .. enemy.Name .. " | Kills: " .. killCount
+
+                        -- Attaque en boucle jusqu'à mort
+                        local maxHits = 0
+                        while autoFarmOn and enemyHum and enemyHum.Health > 0 and maxHits < 200 do
+                            -- Reste collé à l'ennemi
+                            if enemyRoot and enemyRoot.Parent then
+                                rootPart.CFrame = enemyRoot.CFrame * CFrame.new(0, 0, 2.5)
+                            end
+                            -- Simule attaque
+                            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                            task.wait(0.05)
+                            maxHits += 1
+                        end
+
+                        if enemyHum.Health <= 0 then
+                            killCount  += 1
+                            loopKills  += 1
+                            status = "✅ Kill #" .. killCount .. " | " .. currentQuest.mob
+                        end
+                    end
+                else
+                    -- Aller à la zone des mobs
+                    status = "🔍 Cherche des ennemis..."
+                    tpTo(currentQuest.mobPos)
+                    task.wait(1)
+                end
+
+                task.wait(0.1)
+            end
+
+            -- Quête complète !
+            if isQuestComplete() or loopKills >= 10 then
+                status = "🎉 Quête complète ! Retour NPC..."
+                killCount = 0
+
+                -- Retourner au NPC pour rendre la quête
+                tpTo(currentQuest.npcPos)
+                task.wait(0.5)
+
+                -- Tente de rendre la quête
+                for _, obj in pairs(Workspace:GetDescendants()) do
+                    if obj:IsA("Model") and obj.Name:lower():find(currentQuest.npc:lower():sub(1,5)) then
+                        local root = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+                        if root then
+                            tpTo(root.Position)
+                            pcall(function()
+                                ReplicatedStorage.Remotes:FindFirstChild("CommF_"):InvokeServer("TurnInQuest")
+                            end)
+                            task.wait(0.5)
+                            break
+                        end
+                    end
+                end
+
+                status = "🔄 Nouvelle quête dans 2s..."
+                task.wait(2)
+            end
+
+            task.wait(0.5)
+        end
+        status = "⏹️ Auto Farm arrêté"
+    end)
+end
+
+local function stopAutoFarm()
+    autoFarmOn = false
+    farmConn   = nil
+    status     = "⏹️ Arrêté"
+end
+
+-- ════════════════════════════════════
+--              GUI
+-- ════════════════════════════════════
+if playerGui:FindFirstChild("BFHub") then
+    playerGui:FindFirstChild("BFHub"):Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name         = "BFHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 999
+pcall(function() ScreenGui.Parent = playerGui end)
+if not ScreenGui.Parent then
+    pcall(function() ScreenGui.Parent = game:GetService("CoreGui") end)
+end
+
+local Main = Instance.new("Frame", ScreenGui)
+Main.Size             = UDim2.new(0, 300, 0, 260)
+Main.Position         = UDim2.new(0, 20, 0.5, -130)
+Main.BackgroundColor3 = Color3.fromRGB(9, 7, 18)
+Main.BorderSizePixel  = 0
+Main.ClipsDescendants = true
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 14)
+local ms = Instance.new("UIStroke", Main)
+ms.Color = Color3.fromRGB(255, 140, 0); ms.Thickness = 1.5
+
+-- TopBar
+local TopBar = Instance.new("Frame", Main)
+TopBar.Size = UDim2.new(1, 0, 0, 44)
+TopBar.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+TopBar.BorderSizePixel = 0
+Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 14)
+local tbFix = Instance.new("Frame", TopBar)
+tbFix.Size = UDim2.new(1,0,0.5,0); tbFix.Position = UDim2.new(0,0,0.5,0)
+tbFix.BackgroundColor3 = Color3.fromRGB(200,100,0); tbFix.BorderSizePixel = 0
+
+local Title = Instance.new("TextLabel", TopBar)
+Title.Text = "🍈  BLOX FRUITS AUTO FARM"
+Title.Size = UDim2.new(1,-10,1,0); Title.Position = UDim2.new(0,12,0,0)
+Title.BackgroundTransparency = 1; Title.TextColor3 = Color3.fromRGB(255,255,255)
+Title.TextSize = 13; Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Drag
+local dragging, dragStart, startPos
+TopBar.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = inp.Position; startPos = Main.Position
+    end
+end)
+TopBar.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+UserInputService.InputChanged:Connect(function(inp)
+    if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+        local d = inp.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset+d.X, startPos.Y.Scale, startPos.Y.Offset+d.Y)
+    end
+end)
+
+-- Status box
+local StatusBox = Instance.new("Frame", Main)
+StatusBox.Size = UDim2.new(1,-20,0,50)
+StatusBox.Position = UDim2.new(0,10,0,54)
+StatusBox.BackgroundColor3 = Color3.fromRGB(18,12,30)
+StatusBox.BorderSizePixel = 0
+Instance.new("UICorner", StatusBox).CornerRadius = UDim.new(0,8)
+local sbStroke = Instance.new("UIStroke", StatusBox)
+sbStroke.Color = Color3.fromRGB(255,140,0); sbStroke.Thickness = 1
+
+local StatusLabel = Instance.new("TextLabel", StatusBox)
+StatusLabel.Size = UDim2.new(1,-10,1,0); StatusLabel.Position = UDim2.new(0,8,0,0)
+StatusLabel.BackgroundTransparency = 1; StatusLabel.TextColor3 = Color3.fromRGB(255,200,100)
+StatusLabel.TextSize = 12; StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.TextWrapped = true; StatusLabel.Text = "⏹️ En attente..."
+
+-- Info niveau
+local LevelLabel = Instance.new("TextLabel", Main)
+LevelLabel.Size = UDim2.new(1,-20,0,28)
+LevelLabel.Position = UDim2.new(0,10,0,112)
+LevelLabel.BackgroundTransparency = 1
+LevelLabel.TextColor3 = Color3.fromRGB(200,180,255)
+LevelLabel.TextSize = 12; LevelLabel.Font = Enum.Font.Gotham
+LevelLabel.TextXAlignment = Enum.TextXAlignment.Left
+LevelLabel.Text = "Niveau : --  |  Quête : --"
+
+-- Bouton START
+local StartBtn = Instance.new("TextButton", Main)
+StartBtn.Size = UDim2.new(0,120,0,42)
+StartBtn.Position = UDim2.new(0,10,0,148)
+StartBtn.BackgroundColor3 = Color3.fromRGB(50,180,50)
+StartBtn.TextColor3 = Color3.fromRGB(255,255,255)
+StartBtn.TextSize = 14; StartBtn.Font = Enum.Font.GothamBold
+StartBtn.Text = "▶  START"
+StartBtn.BorderSizePixel = 0; StartBtn.AutoButtonColor = false
+Instance.new("UICorner", StartBtn).CornerRadius = UDim.new(0,10)
+
+-- Bouton STOP
+local StopBtn = Instance.new("TextButton", Main)
+StopBtn.Size = UDim2.new(0,120,0,42)
+StopBtn.Position = UDim2.new(1,-130,0,148)
+StopBtn.BackgroundColor3 = Color3.fromRGB(180,40,40)
+StopBtn.TextColor3 = Color3.fromRGB(255,255,255)
+StopBtn.TextSize = 14; StopBtn.Font = Enum.Font.GothamBold
+StopBtn.Text = "⏹  STOP"
+StopBtn.BorderSizePixel = 0; StopBtn.AutoButtonColor = false
+Instance.new("UICorner", StopBtn).CornerRadius = UDim.new(0,10)
+
+-- Toggle Anti-Players
+local AntiLabel = Instance.new("TextLabel", Main)
+AntiLabel.Size = UDim2.new(1,-20,0,30)
+AntiLabel.Position = UDim2.new(0,10,0,200)
+AntiLabel.BackgroundTransparency = 1
+AntiLabel.TextColor3 = Color3.fromRGB(100,255,100)
+AntiLabel.TextSize = 12; AntiLabel.Font = Enum.Font.Gotham
+AntiLabel.TextXAlignment = Enum.TextXAlignment.Left
+AntiLabel.Text = "✅ Anti-Joueurs : ACTIF  (ennemis seulement)"
+
+-- Kill counter
+local KillLabel = Instance.new("TextLabel", Main)
+KillLabel.Size = UDim2.new(1,-20,0,24)
+KillLabel.Position = UDim2.new(0,10,0,228)
+KillLabel.BackgroundTransparency = 1
+KillLabel.TextColor3 = Color3.fromRGB(255,200,100)
+KillLabel.TextSize = 11; KillLabel.Font = Enum.Font.Gotham
+KillLabel.TextXAlignment = Enum.TextXAlignment.Left
+KillLabel.Text = "💀 Kills session : 0"
+
+-- ── BOUTONS ──
+StartBtn.MouseButton1Click:Connect(function()
+    if not autoFarmOn then
+        autoFarmOn = true
+        TweenService:Create(StartBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(30,140,30)}):Play()
+        startAutoFarm()
+    end
+end)
+
+StopBtn.MouseButton1Click:Connect(function()
+    stopAutoFarm()
+    TweenService:Create(StartBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(50,180,50)}):Play()
+end)
+
+-- Update GUI en temps réel
+RunService.Heartbeat:Connect(function()
+    StatusLabel.Text = status
+    KillLabel.Text   = "💀 Kills session : " .. killCount
+    local lvl = getLevel()
+    local q   = getQuestForLevel(lvl)
+    LevelLabel.Text  = "Niveau : " .. lvl .. "  |  Quête : " .. (q and q.mob or "?")
+end)
+
+print("✅ [Blox Fruits Auto Farm v3.0] Chargé !")
